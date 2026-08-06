@@ -415,9 +415,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-linux-${{ matrix.variant }}-${{ github.event.pull_request.number && 'pr' || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          key: ccache-linux-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
-            ${{ github.event.pull_request.number && format('ccache-linux-{0}-pr-', matrix.variant) || '' }}
+            ${{ github.event.pull_request.number && format('ccache-linux-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
             ccache-linux-${{ matrix.variant }}-master-
 
       - name: Cache apt packages
@@ -621,9 +621,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-macos-${{ matrix.variant }}-${{ github.event.pull_request.number && 'pr' || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          key: ccache-macos-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
-            ${{ github.event.pull_request.number && format('ccache-macos-{0}-pr-', matrix.variant) || '' }}
+            ${{ github.event.pull_request.number && format('ccache-macos-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
             ccache-macos-${{ matrix.variant }}-master-
 
       - name: Install build dependencies
@@ -804,9 +804,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-aarch64-${{ matrix.variant }}-${{ github.event.pull_request.number && 'pr' || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          key: ccache-aarch64-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
-            ${{ github.event.pull_request.number && format('ccache-aarch64-{0}-pr-', matrix.variant) || '' }}
+            ${{ github.event.pull_request.number && format('ccache-aarch64-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
             ccache-aarch64-${{ matrix.variant }}-master-
 
       - name: Cache apt packages
@@ -1008,6 +1008,9 @@ jobs:
     name: "Build Windows (${{ matrix.variant }})"
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}\sccache_cache
+      SCCACHE_CACHE_SIZE: 2G
     strategy:
       fail-fast: false
       matrix:
@@ -1020,6 +1023,26 @@ jobs:
           fetch-tags: true
           persist-credentials: false
           allow-unsafe-pr-checkout: true
+
+      - name: Cache sccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-windows-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ${{ github.event.pull_request.number && format('sccache-windows-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
+            sccache-windows-${{ matrix.variant }}-master-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mozilla/sccache/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.tar.gz" } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile sccache.tar.gz
+          tar -xzf sccache.tar.gz
+          $sccacheDir = (Get-ChildItem -Directory -Filter "sccache-*").FullName
+          echo "$sccacheDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$sccacheDir\sccache.exe" --start-server
 
       - name: Install nasm
         shell: pwsh
@@ -1040,7 +1063,7 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\8bit -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON && cmake --build build\8bit --config Release -j"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\8bit -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\8bit --config Release -j"
           if (!(Test-Path "build\8bit\Release\x265.exe")) { exit 1 }
           Write-Host "8-bit CLI OK"
           & "build\8bit\Release\x265.exe" --version
@@ -1055,7 +1078,7 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\10bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON && cmake --build build\10bit --config Release -j"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\10bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\10bit --config Release -j"
           if (!(Test-Path "build\10bit\Release\x265.exe")) { exit 1 }
           Write-Host "10-bit CLI OK"
           & "build\10bit\Release\x265.exe" --version
@@ -1069,7 +1092,7 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\12bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON && cmake --build build\12bit --config Release -j"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\12bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\12bit --config Release -j"
           if (!(Test-Path "build\12bit\Release\x265.exe")) { exit 1 }
           Write-Host "12-bit CLI OK"
           & "build\12bit\Release\x265.exe" --version
@@ -1083,7 +1106,7 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\12bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DEXPORT_C_API=OFF -DENABLE_ASSEMBLY=ON && cmake --build build\multilib\12bit --config Release -j"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\12bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DEXPORT_C_API=OFF -DENABLE_ASSEMBLY=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\multilib\12bit --config Release -j"
 
       - name: Build multilib 10-bit component
         if: matrix.variant == 'multilib'
@@ -1092,7 +1115,7 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\10bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DEXPORT_C_API=OFF -DENABLE_ASSEMBLY=ON && cmake --build build\multilib\10bit --config Release -j"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\10bit -DCMAKE_BUILD_TYPE=Release -DHIGH_BIT_DEPTH=ON -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DEXPORT_C_API=OFF -DENABLE_ASSEMBLY=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\multilib\10bit --config Release -j"
 
       - name: Build multilib 8-bit (linked)
         if: matrix.variant == 'multilib'
@@ -1111,7 +1134,7 @@ jobs:
           set(LINKED_10BIT ON CACHE BOOL "" FORCE)
           set(LINKED_12BIT ON CACHE BOOL "" FORCE)
           "@ | Set-Content $cacheFile
-              cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\8bit -C build\multilib\8bit\init.cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON && cmake --build build\multilib\8bit --config Release -j"
+              cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\multilib\8bit -C build\multilib\8bit\init.cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\multilib\8bit --config Release -j"
               if (!(Test-Path "build\multilib\8bit\Release\x265.exe")) { exit 1 }
               Write-Host "Multilib CLI OK"
               & "build\multilib\8bit\Release\x265.exe" --version
@@ -1149,6 +1172,12 @@ jobs:
             build/multilib/8bit/Release/x265.exe
             build/multilib/8bit/Release/libx265.dll
           retention-days: 3
+
+      - name: Show sccache stats
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        run: sccache --show-stats
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Phase 2 – Tests (parallel matrix per test category, per platform)
