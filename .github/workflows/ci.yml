@@ -600,6 +600,144 @@ jobs:
             build/multilib/8bit/libx265.so*
           retention-days: 3
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Debug builds (Linux/Windows only) — feed smoke-linux's / smoke-windows's
+  # debug matrix legs via smoke-test.py's --no-make binary substitution.
+  # No macOS/AArch64 debug builds: those platforms don't run smoke tests,
+  # so there's nothing to feed.
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  build-linux-debug:
+    name: "Build Linux Debug (${{ matrix.variant }})"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [8bit, 10bit, 12bit]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-linux-debug-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ${{ github.event.pull_request.number && format('ccache-linux-debug-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
+            ccache-linux-debug-${{ matrix.variant }}-master-
+
+      - name: Cache apt packages
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/apt-archives
+          key: apt-build-linux-v2
+          restore-keys: apt-build-linux-v2
+      - name: Pre-populate apt cache
+        run: sudo cp /home/runner/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential cmake nasm ccache libnuma-dev
+
+      - name: Prepare apt cache
+        if: always()
+        run: |
+          mkdir -p /home/runner/apt-archives
+          cp -n /var/cache/apt/archives/*.deb /home/runner/apt-archives/ 2>/dev/null || true
+
+      # ── 8-bit ──────────────────────────────────────────────────────────────
+      - name: Build 8-bit debug
+        if: matrix.variant == '8bit'
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          mkdir -p build/8bit && cd build/8bit
+          cmake ../../source \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=ON \
+            -DENABLE_ASSEMBLY=ON \
+            -DENABLE_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          make -j$(nproc)
+          test -f x265 && echo "8-bit debug CLI OK"
+          ./x265 --version
+          echo "--- Unit tests ---"
+          ./test/TestBench
+
+      # ── 10-bit ─────────────────────────────────────────────────────────────
+      - name: Build 10-bit debug
+        if: matrix.variant == '10bit'
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          mkdir -p build/10bit && cd build/10bit
+          cmake ../../source \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DHIGH_BIT_DEPTH=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=ON \
+            -DENABLE_ASSEMBLY=ON \
+            -DENABLE_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          make -j$(nproc)
+          test -f x265 && echo "10-bit debug CLI OK"
+          ./x265 --version
+          ./test/TestBench
+
+      # ── 12-bit ─────────────────────────────────────────────────────────────
+      - name: Build 12-bit debug
+        if: matrix.variant == '12bit'
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          mkdir -p build/12bit && cd build/12bit
+          cmake ../../source \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DHIGH_BIT_DEPTH=ON \
+            -DMAIN12=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=ON \
+            -DENABLE_ASSEMBLY=ON \
+            -DENABLE_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          make -j$(nproc)
+          test -f x265 && echo "12-bit debug CLI OK"
+          ./x265 --version
+          ./test/TestBench
+
+      - name: Upload 8-bit debug artifact
+        if: matrix.variant == '8bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-linux-8bit-debug
+          path: build/8bit/x265
+          retention-days: 3
+
+      - name: Upload 10-bit debug artifact
+        if: matrix.variant == '10bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-linux-10bit-debug
+          path: build/10bit/x265
+          retention-days: 3
+
+      - name: Upload 12-bit debug artifact
+        if: matrix.variant == '12bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-linux-12bit-debug
+          path: build/12bit/x265
+          retention-days: 3
+
   build-macos:
     name: "Build macOS (${{ matrix.variant }})"
     runs-on: macos-latest
@@ -629,7 +767,20 @@ jobs:
       - name: Install build dependencies
         run: |
           brew untap aws/tap || true
-          brew install nasm ccache
+          brew install ccache
+
+      - name: Log toolchain versions
+        run: |
+          echo "=== Apple Clang ==="
+          clang --version
+          echo "=== ccache ==="
+          ccache --version | head -1
+          echo "=== NASM ==="
+          if command -v nasm >/dev/null 2>&1; then
+            nasm -v
+          else
+            echo "nasm not installed — not required on this architecture (${{ runner.arch }}); x265 uses AArch64 NEON assembly compiled via clang, not NASM, on Apple Silicon"
+          fi
 
       # ── 8-bit ──────────────────────────────────────────────────────────────
       - name: Build 8-bit
@@ -1171,6 +1322,129 @@ jobs:
           path: |
             build/multilib/8bit/Release/x265.exe
             build/multilib/8bit/Release/libx265.dll
+          retention-days: 3
+
+      - name: Show sccache stats
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        run: sccache --show-stats
+
+  build-windows-debug:
+    name: "Build Windows Debug (${{ matrix.variant }})"
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}\sccache_cache
+      SCCACHE_CACHE_SIZE: 2G
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [8bit, 10bit, 12bit]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+
+      - name: Cache sccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-windows-debug-${{ matrix.variant }}-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'master' }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            ${{ github.event.pull_request.number && format('sccache-windows-debug-{0}-pr{1}-', matrix.variant, github.event.pull_request.number) || '' }}
+            sccache-windows-debug-${{ matrix.variant }}-master-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mozilla/sccache/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.tar.gz" } | Select-Object -First 1
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile sccache.tar.gz
+          tar -xzf sccache.tar.gz
+          $sccacheDir = (Get-ChildItem -Directory -Filter "sccache-*").FullName
+          echo "$sccacheDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$sccacheDir\sccache.exe" --start-server
+
+      - name: Install nasm
+        shell: pwsh
+        run: |
+          choco install nasm -y
+          $nasmPath = "C:\Program Files\NASM"
+          if (Test-Path $nasmPath) {
+            echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            [System.Environment]::SetEnvironmentVariable("PATH", "$nasmPath;$env:PATH", "Process")
+          }
+
+      # ── 8-bit ──────────────────────────────────────────────────────────────
+      - name: Build 8-bit debug
+        if: matrix.variant == '8bit'
+        shell: pwsh
+        run: |
+          $nasmPath = "C:\Program Files\NASM"
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\8bit -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\8bit --config Debug -j"
+          if (!(Test-Path "build\8bit\Debug\x265.exe")) { exit 1 }
+          Write-Host "8-bit debug CLI OK"
+          & "build\8bit\Debug\x265.exe" --version
+          Write-Host "--- Unit tests ---"
+          & "build\8bit\test\Debug\TestBench.exe"
+
+      # ── 10-bit ─────────────────────────────────────────────────────────────
+      - name: Build 10-bit debug
+        if: matrix.variant == '10bit'
+        shell: pwsh
+        run: |
+          $nasmPath = "C:\Program Files\NASM"
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\10bit -DHIGH_BIT_DEPTH=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\10bit --config Debug -j"
+          if (!(Test-Path "build\10bit\Debug\x265.exe")) { exit 1 }
+          Write-Host "10-bit debug CLI OK"
+          & "build\10bit\Debug\x265.exe" --version
+          & "build\10bit\test\Debug\TestBench.exe"
+
+      # ── 12-bit ─────────────────────────────────────────────────────────────
+      - name: Build 12-bit debug
+        if: matrix.variant == '12bit'
+        shell: pwsh
+        run: |
+          $nasmPath = "C:\Program Files\NASM"
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcvars = "$vsPath\VC\Auxiliary\Build\vcvars64.bat"
+          cmd /c "`"$vcvars`" && set PATH=$nasmPath;%PATH% && cmake -S source -B build\12bit -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DENABLE_SHARED=OFF -DENABLE_CLI=ON -DENABLE_ASSEMBLY=ON -DENABLE_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache && cmake --build build\12bit --config Debug -j"
+          if (!(Test-Path "build\12bit\Debug\x265.exe")) { exit 1 }
+          Write-Host "12-bit debug CLI OK"
+          & "build\12bit\Debug\x265.exe" --version
+          & "build\12bit\test\Debug\TestBench.exe"
+
+      - name: Upload 8-bit debug artifact
+        if: matrix.variant == '8bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-windows-8bit-debug
+          path: build/8bit/Debug/x265.exe
+          retention-days: 3
+
+      - name: Upload 10-bit debug artifact
+        if: matrix.variant == '10bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-windows-10bit-debug
+          path: build/10bit/Debug/x265.exe
+          retention-days: 3
+
+      - name: Upload 12-bit debug artifact
+        if: matrix.variant == '12bit'
+        uses: actions/upload-artifact@v7
+        with:
+          name: x265-windows-12bit-debug
+          path: build/12bit/Debug/x265.exe
           retention-days: 3
 
       - name: Show sccache stats
@@ -2732,10 +3006,23 @@ jobs:
           path: assets/*.tar.gz
           retention-days: 1
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Smoke - Linux: reuses build-linux/build-linux-debug's already-built x265
+  # binaries instead of having the harness compile its own copies, via
+  # smoke-test.py's --no-make flag. See Build.__init__ in the harness's
+  # utils.py: for a non-MSVC ('Unix Makefiles') generator it expects the
+  # binary at $HARNESS_DIR/x265/<folder>/default/x265 (no Debug/Release
+  # subfolder — that split is MSVC-only). Folder names come straight from
+  # the harness's conf.py my_builds entries; most match the build key
+  # exactly, but the debug configs are irregular (gcc_8bit_debug ->
+  # gcc_debug/, gcc_10bit_debug -> gcc10_debug/) — verified against the
+  # actual cloned test-harness-git/conf.py.
+  # ─────────────────────────────────────────────────────────────────────────────
+
   smoke-linux:
     name: "Smoke - Linux (${{ matrix.build }})"
     runs-on: ubuntu-latest
-    needs: [code-quality, prep-assets]
+    needs: [code-quality, prep-assets, build-linux, build-linux-debug]
     if: github.event_name == 'pull_request_target'
     timeout-minutes: 60
     strategy:
@@ -2824,17 +3111,43 @@ jobs:
       - name: "Install dependencies"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nasm libnuma-dev
+          sudo apt-get install -y libnuma-dev
           python3 -m pip install msal requests psutil --break-system-packages
           echo "[OK] Dependencies installed"
+
+      - name: "Download pre-built binary (${{ matrix.build }})"
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.build == 'gcc' && 'x265-linux-8bit' || matrix.build == 'gcc_8bit_debug' && 'x265-linux-8bit-debug' || matrix.build == 'gcc-main10' && 'x265-linux-10bit' || matrix.build == 'gcc_10bit_debug' && 'x265-linux-10bit-debug' || matrix.build == 'gccmain12' && 'x265-linux-12bit' || matrix.build == 'gccmain12_debug' && 'x265-linux-12bit-debug' || 'x265-linux-multilib' }}
+          path: prebuilt
+
+      - name: "Place pre-built binary for harness"
+        run: |
+          case "${{ matrix.build }}" in
+            gcc)              FOLDER="gcc" ;;
+            gcc_8bit_debug)   FOLDER="gcc_debug" ;;
+            gcc-main10)       FOLDER="gcc-main10" ;;
+            gcc_10bit_debug)  FOLDER="gcc10_debug" ;;
+            gccmain12)        FOLDER="gccmain12" ;;
+            gccmain12_debug)  FOLDER="gccmain12_debug" ;;
+            gcc-multilib)     FOLDER="gcc-multilib" ;;
+          esac
+          DEST_DIR="$HARNESS_DIR/x265/$FOLDER/default"
+          mkdir -p "$DEST_DIR"
+          cp prebuilt/x265 "$DEST_DIR/x265"
+          chmod +x "$DEST_DIR/x265"
+          if [ -f prebuilt/libx265.so ]; then
+            cp prebuilt/libx265.so "$DEST_DIR/libx265.so"
+          fi
+          echo "[OK] Placed pre-built ${{ matrix.build }} binary at $DEST_DIR"
 
       - name: "Run smoke-test.py (${{ matrix.build }})"
         run: |
           cd "$HARNESS_DIR"
-          echo "=== Starting smoke test for build: ${{ matrix.build }} ==="
-          python3 smoke-test.py -b "${{ matrix.build }}" -t "$SMOKE_TESTS_FILE"
+          echo "=== Starting smoke test for build: ${{ matrix.build }} (pre-built binary, --no-make) ==="
+          python3 smoke-test.py -b "${{ matrix.build }}" -t "$SMOKE_TESTS_FILE" --no-make
           echo "[OK] Linux smoke test PASSED for ${{ matrix.build }}"
-      
+
       - name: "Set log upload path"
         if: always()
         run: |
@@ -2849,10 +3162,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Smoke - Windows: reuses build-windows/build-windows-debug's already-built
+  # x265.exe/libx265.dll instead of having the harness compile its own
+  # copies, via smoke-test.py's --no-make flag. Build.__init__ expects the
+  # binary at $HARNESS_DIR/x265/<build>/default/<Release|Debug>/x265.exe —
+  # folder name equals the build key for every config, including the debug
+  # ones — verified against the actual cloned test-harness-git/conf.py.
+  # ─────────────────────────────────────────────────────────────────────────────
+
   smoke-windows:
     name: "Smoke - Windows (${{ matrix.build }})"
     runs-on: windows-2022
-    needs: [code-quality, prep-assets]
+    needs: [code-quality, prep-assets, build-windows, build-windows-debug]
     if: github.event_name == 'pull_request_target'
     timeout-minutes: 60
     defaults:
@@ -2996,19 +3318,37 @@ jobs:
 
       - name: "Install dependencies"
         run: |
-          choco install nasm -y --no-progress
-          echo "C:\Program Files\NASM" >> $GITHUB_PATH
           python3 -m pip install msal requests psutil setuptools
           echo "[OK] Dependencies installed"
+
+      - name: "Download pre-built binary (${{ matrix.build }})"
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.build == 'vc17_64_8bpp' && 'x265-windows-8bit' || matrix.build == 'vc17_64_8bpp_debug' && 'x265-windows-8bit-debug' || matrix.build == 'vc17_64_16bpp' && 'x265-windows-10bit' || matrix.build == 'vc17_64_16bpp_debug' && 'x265-windows-10bit-debug' || matrix.build == 'vc17_64_main12' && 'x265-windows-12bit' || matrix.build == 'vc17_64_main12_debug' && 'x265-windows-12bit-debug' || 'x265-windows-multilib' }}
+          path: prebuilt
+
+      - name: "Place pre-built binary for harness"
+        run: |
+          case "${{ matrix.build }}" in
+            *_debug) TARGET="Debug" ;;
+            *)       TARGET="Release" ;;
+          esac
+          DEST_DIR="$HARNESS_DIR/x265/${{ matrix.build }}/default/$TARGET"
+          mkdir -p "$DEST_DIR"
+          cp prebuilt/x265.exe "$DEST_DIR/x265.exe"
+          if [ -f prebuilt/libx265.dll ]; then
+            cp prebuilt/libx265.dll "$DEST_DIR/libx265.dll"
+          fi
+          echo "[OK] Placed pre-built ${{ matrix.build }} binary at $DEST_DIR"
 
       - name: "Run smoke-test.py (${{ matrix.build }})"
         run: |
           cd "$HARNESS_DIR"
-          echo "=== Starting smoke test for build: ${{ matrix.build }} ==="
+          echo "=== Starting smoke test for build: ${{ matrix.build }} (pre-built binary, --no-make) ==="
           WIN_SMOKE_TESTS_FILE=$(cygpath -m "$SMOKE_TESTS_FILE")
-          python3 smoke-test.py -b "${{ matrix.build }}" -t "$WIN_SMOKE_TESTS_FILE"
+          python3 smoke-test.py -b "${{ matrix.build }}" -t "$WIN_SMOKE_TESTS_FILE" --no-make
           echo "[OK] Windows smoke test PASSED for ${{ matrix.build }}"
-      
+
       - name: "Set log upload path"
         if: always()
         run: |
@@ -3203,9 +3543,11 @@ jobs:
       - smoke-linux
       - smoke-windows
       - build-linux
+      - build-linux-debug
       - build-macos
       - build-aarch64
       - build-windows
+      - build-windows-debug
       - test-linux
       - test-macos
       - test-aarch64
@@ -3225,9 +3567,11 @@ jobs:
           echo "  Smoke Linux   : ${{ needs.smoke-linux.result }}"
           echo "  Smoke Windows : ${{ needs.smoke-windows.result }}"
           echo "  Build Linux   : ${{ needs.build-linux.result }}"
+          echo "  Build Linux Debug   : ${{ needs.build-linux-debug.result }}"
           echo "  Build macOS   : ${{ needs.build-macos.result }}"
           echo "  Build AArch64 : ${{ needs.build-aarch64.result }}"
           echo "  Build Windows : ${{ needs.build-windows.result }}"
+          echo "  Build Windows Debug : ${{ needs.build-windows-debug.result }}"
           echo "  Test Linux    : ${{ needs.test-linux.result }}"
           echo "  Test macOS    : ${{ needs.test-macos.result }}"
           echo "  Test AArch64  : ${{ needs.test-aarch64.result }}"
@@ -3238,9 +3582,11 @@ jobs:
           [[ "${{ needs.smoke-linux.result }}"     != "success" ]] && ALL_PASS=false && echo "   -> Linux smoke test failed - check uploaded log artifacts"
           [[ "${{ needs.smoke-windows.result }}"   != "success" ]] && ALL_PASS=false && echo "   -> Windows smoke test failed - check uploaded log artifacts"
           [[ "${{ needs.build-linux.result }}"     != "success" ]] && ALL_PASS=false && echo "   -> Linux build failed"
+          [[ "${{ needs.build-linux-debug.result }}" != "success" ]] && ALL_PASS=false && echo "   -> Linux debug build failed"
           [[ "${{ needs.build-macos.result }}"     != "success" ]] && ALL_PASS=false && echo "   -> macOS build failed"
           [[ "${{ needs.build-aarch64.result }}"   != "success" ]] && ALL_PASS=false && echo "   -> AArch64 build failed"
           [[ "${{ needs.build-windows.result }}"   != "success" ]] && ALL_PASS=false && echo "   -> Windows build failed"
+          [[ "${{ needs.build-windows-debug.result }}" != "success" ]] && ALL_PASS=false && echo "   -> Windows debug build failed"
           [[ "${{ needs.test-linux.result }}"      != "success" ]] && ALL_PASS=false && echo "   -> Linux tests failed"
           [[ "${{ needs.test-macos.result }}"      != "success" ]] && ALL_PASS=false && echo "   -> macOS tests failed"
           [[ "${{ needs.test-aarch64.result }}"    != "success" ]] && ALL_PASS=false && echo "   -> AArch64 tests failed"
