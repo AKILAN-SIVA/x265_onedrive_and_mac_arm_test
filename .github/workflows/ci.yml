@@ -3136,9 +3136,10 @@ jobs:
           mkdir -p "$DEST_DIR"
           cp prebuilt/x265 "$DEST_DIR/x265"
           chmod +x "$DEST_DIR/x265"
-          if [ -f prebuilt/libx265.so ]; then
-            cp prebuilt/libx265.so "$DEST_DIR/libx265.so"
-          fi
+          # Copy every versioned .so (libx265.so -> libx265.so.N -> libx265.so.N.M);
+          # the binary's SONAME reference at runtime is the versioned file, not the
+          # bare symlink, so a single-name copy leaves it missing.
+          cp -P prebuilt/libx265.so* "$DEST_DIR/" 2>/dev/null || true
           echo "[OK] Placed pre-built ${{ matrix.build }} binary at $DEST_DIR"
 
       - name: "Run smoke-test.py (${{ matrix.build }})"
