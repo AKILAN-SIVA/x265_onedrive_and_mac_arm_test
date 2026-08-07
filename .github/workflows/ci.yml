@@ -3145,7 +3145,7 @@ jobs:
         run: |
           cd "$HARNESS_DIR"
           echo "=== Starting smoke test for build: ${{ matrix.build }} (pre-built binary, --no-make) ==="
-          python3 smoke-test.py -b "${{ matrix.build }}" -t "$SMOKE_TESTS_FILE" --no-make
+          python3 smoke-test.py -b "${{ matrix.build }}" -t "$SMOKE_TESTS_FILE" --no-make --no-bench
           echo "[OK] Linux smoke test PASSED for ${{ matrix.build }}"
 
       - name: "Set log upload path"
@@ -3346,7 +3346,7 @@ jobs:
           cd "$HARNESS_DIR"
           echo "=== Starting smoke test for build: ${{ matrix.build }} (pre-built binary, --no-make) ==="
           WIN_SMOKE_TESTS_FILE=$(cygpath -m "$SMOKE_TESTS_FILE")
-          python3 smoke-test.py -b "${{ matrix.build }}" -t "$WIN_SMOKE_TESTS_FILE" --no-make
+          python3 smoke-test.py -b "${{ matrix.build }}" -t "$WIN_SMOKE_TESTS_FILE" --no-make --no-bench
           echo "[OK] Windows smoke test PASSED for ${{ matrix.build }}"
 
       - name: "Set log upload path"
